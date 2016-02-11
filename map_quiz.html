@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+
+<!-- Benjamin Plotkin -->
+<!-- 11/14/2015 -->
+
+<html>
+   <head>
+      <meta charset = 'utf-8'>
+      <style type='text/css'>
+         /* let's set some default style values */
+         h1 {
+            font-family: tahoma, helvetica, sans-serif;
+            font-size: 1.5em;
+         }
+
+         h2 {
+            font-family: tahoma, helvetica, sans-serif;
+            font-size: 1.2em;
+         }
+
+         p {
+            font-family: tahoma, helvetica, sans-serif;
+            font-size: 1.0em;
+         }
+
+         html { height: 100%; }
+
+         body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+         }
+
+         /* our questions/answers area */
+         #quizArea {
+            padding: 5px;
+            height: 110px;
+         }
+
+         /* our google maps area */
+         #map-canvas { height: 90%; }
+
+         /* our object to be animated */
+         #scoreBoard {
+            display: none;
+            text-align: center;
+            margin: 2px;
+            background-color: #00CCCC;
+            border: 2px solid #00AAAA;
+            width: 300px;
+            height: 100px;
+            top: 5px;
+            position: absolute;
+         }
+      </style>
+
+      <!-- google maps api -->
+      <script type='text/javascript'
+        src='https://maps.googleapis.com/maps/api/js'>
+      </script>
+
+      <!-- jquery api -->
+      <script type='text/javascript'
+        src='http://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js'>
+      </script>
+      <title>Benjamin Plotkin - LAB3.HTML</title>
+      <!-- BEGIN JAVASCRIPT -->
+      <script type='text/javascript'>
+         // global variables
+         var map;
+         var quizList; // an array of question objects
+         var qNum; // current question number
+         var numCorrect;
+         var COUNTDOWN = 3000; // # of ms till next question loads
+         var waiting; // binary semaphore -- are we waiting for next question?
+
+         // JSON string (array of quiz location data)
+         // to quote nacho libre: "eece for fun"
+         var quizText = '[' +
+            '{"name":"Oviatt Library", ' +
+            '"lat1":"34.23947289910564", "lng1":"-118.53001892566681", ' +
+            '"lat2":"34.24039413482754", "lng2":"-118.52863490581512"},' +
+            '{"name":"Arbor Grill", ' +
+            '"lat1":"34.240961771833234", "lng1":"-118.5300725698471", ' +
+            '"lat2":"34.24140967020631", "lng2":"-118.52953612804413"},' +
+            '{"name":"Bianchi Planetarium", ' +
+            '"lat1":"34.23892535632353", "lng1":"-118.528557121753690", ' +
+            '"lat2":"34.23913157224512", "lng2":"-118.52761030197144"},' +
+            '{"name":"Klotz Health Center", ' +
+            '"lat1":"34.238074765729024", "lng1":"-118.5266500711441", ' +
+            '"lat2":"34.23839288822168", "lng2":"-118.52600634098053"},' +
+            '{"name":"Live Oak Hall", '+
+            '"lat1":"34.238173957400704", "lng1":"-118.52879583835602", ' +
+            '"lat2":"34.238377957770254", "lng2":"-118.52763175964355"} ]';
+
+         // set up (or reset) the quiz environment
+         function init() {
+            // initialize our globals
+            quizList = [];
+            qNum = numCorrect = 0;
+            waiting = false;
+
+            // set up our map
+            var mapOptions = {
+               zoom: 18,
+               center: new google.maps.LatLng(34.239481768560346,
+                -118.52770686149597),
+               mapTypeId: google.maps.MapTypeId.ROADMAP,
+               disableDoubleClickZoom: true,
+               disableDefaultUI: true,
+               zoomControl: false,
+               draggable: false,
+               panControl: false,
+               mapTypeControl: false,
+               scaleControl: false,
+               streetViewControl: false,
+               overviewMapControl: false,
+               scrollwheel: false,
+            };
+
+            map = new google.maps.Map(document.getElementById('map-canvas'),
+               mapOptions);
+
+            // hide map labels
+            var styles = [ {
+               featureType: 'all',
+               elementType: 'labels',
+               stylers: [ { visibility: 'off' } ]
+            } ];
+            map.setOptions({styles: styles});
+
+            // load quiz array
+            loadQuiz(quizText);
+
+            // clear scoreboard
+            clearScore();
+
+            // initialize question and answer text areas
+            updateQuestion();
+
+            // set up listener for double-click events
+            google.maps.event.addListener(map, 'dblclick', doubleClicked);
+         }
+
+         // primary UI function: updates map on user input, reloads at end
+         function doubleClicked(ev)	{
+            // if waiting on update activity, ignore user input
+            if(waiting) {
+               console.log('Updating quiz, input ignored!');
+               return;
+            }
+
+            // if quiz is complete, double-clicking will reset quiz
+            if(qNum >= quizList.length) {
+               init();
+               return;
+            }
+
+            // if we've got this far, we're in an active quiz -- check input and
+            // update quiz and map appropriately
+            checkAnswer(ev);
+
+            // no 'NEXT' buttons here -- using a timer to advance quiz :)
+            // set our binary semaphore to ignore user input while advancing
+            waiting = true;
+            setTimeout(advQuiz, COUNTDOWN);
+        	}
+
+         /* ----------------------- HELPER FUNCTIONS ------------------------ */
+
+         // helper function to load quiz location data
+         function loadQuiz(inStr) {
+            // parse the provided JSON string
+            var quizObj = JSON.parse(inStr);
+            var x;
+            // iterate through the JSON object elements
+            for(x in quizObj) {
+               var name = quizObj[x].name;
+               // create google maps bounds from given lat/lng data
+               var bounds = new google.maps.LatLngBounds(
+                  new google.maps.LatLng(quizObj[x].lat1, quizObj[x].lng1),
+                  new google.maps.LatLng(quizObj[x].lat2, quizObj[x].lng2));
+               // create google maps rectangle from bounds
+               var rect = new google.maps.Rectangle({bounds:bounds});
+               // push quiz location as new object into quiz array
+               quizList[x] = {name:name, bounds:bounds, rect:rect};
+               console.log('loaded ' + quizList[x].name + ': bounds = ' +
+                  quizList[x].bounds.toString());
+            }
+         }
+
+         // advance quiz without buttons
+         function advQuiz() {
+            // increment question number
+            qNum++;
+            // load next question, else fly in the scoreboard
+            if(qNum < quizList.length) {
+               updateQuestion();
+            } else {
+               showScore();
+            }
+            // clear our binary semaphore to allow user input again
+            waiting = false;
+         }
+
+         // check user's quiz answer, update quiz and map
+         function checkAnswer(pt) {
+            // if correct answer, set current question rectangle to green,
+            // increment score, and update result text with affirmation
+            if(quizList[qNum].bounds.contains(new google.maps.LatLng(pt.latLng.lat(),
+               pt.latLng.lng()))) {
+               quizList[qNum].rect.setOptions({strokeColor: '#00FF55',
+                  fillColor: '#00FF55'
+               });
+               numCorrect++;
+               updateAnswer(true);
+            }
+            // else incorrect answer -- set rectangle to red, and update result
+            // text with rejection
+            else {
+               quizList[qNum].rect.setOptions({strokeColor: '#FF0022',
+                  fillColor: '#FF0022'
+               });
+               updateAnswer(false);
+            }
+
+            // draw the current rectangle on the map
+            quizList[qNum].rect.setOptions({strokeOpacity: 0.9,
+               strokeWeight: 2,
+               fillOpacity: 0.5,
+               map: map
+               });
+         }
+
+         // update quiz question/answer text
+         function updateQuestion() {
+            $('#question').html('Double-click on the ' + quizList[qNum].name +
+               '!');
+            $('#answer').html('<br>');
+         }
+
+         // update quiz answer text based on correctness
+         function updateAnswer(inFlag) {
+            $('#answer').html('You chose...');
+            // conditional appends to results text based on answer correctness
+            if(inFlag) {
+               $('#answer').append('WISELY.').css({color:'#00FF55'});
+            } else {
+               $('#answer').append('POORLY.').css({color:'#FF0022'});
+            }
+            // conditional appends based on whether quiz is finished or not
+            if(qNum < (quizList.length-1)) { // yeah, '-1' is a bit hacky :)
+               $('#answer').append(' <em>Next question will load in ' +
+               COUNTDOWN/1000 + ' seconds!</em>');
+            } else {
+               $('#answer').append(' <em>Calculating your score....</em>');
+            }
+         }
+
+         // animate scoreboard (concatentation of jquery animation calls)
+         function showScore() {
+            $('#scoreResults').html('You scored ' + numCorrect + ' out of 5!' +
+               '<br>Double-click the map to try again....');
+            $('#scoreBoard').show().animate({left:800}, 300).animate({left:400},
+               600).animate({left:600}, 900);
+         }
+
+         // reset scoreboard
+         function clearScore() {
+            $('#scoreResults').html('');
+            $('#scoreBoard').hide().css({left:0});
+         }
+
+         // javascript execution starts here :)
+         window.addEventListener('load', init, false);
+      </script>
+      <!-- END JAVASCRIPT -->
+   </head>
+   <body>
+      <!-- scoreboard section (hidden until end of quiz) -->
+      <div id = 'scoreBoard'>
+         <h2><span id = 'scoreResults'>PENDING</span></h2>
+      </div>
+      <!-- quiz questions/answers -->
+      <div id = 'quizArea'>
+         <h2>CSUN Campus Quiz -- Do You Have What It Takes?!</h2>
+         <p><span id = 'question'></span></p>
+         <p><strong><span id='answer'></span></strong></p>
+      </div>
+      <!-- map container -->
+      <div id = 'map-canvas'></div>
+   </body>
+</html>
